@@ -1,7 +1,8 @@
 import { requireAuth } from '@/lib/auth';
 import { getDB } from '@/lib/db';
 import { ObjectId } from 'mongodb';
-import { bulkDeletePlayers } from '@/app/actions';
+import { redirect } from 'next/navigation';
+import { bulkDeletePlayers, resetAllToStarterKit } from '@/app/actions';
 
 async function getMergedPlayers(search: string) {
   const db = await getDB();
@@ -56,11 +57,12 @@ async function getMergedPlayers(search: string) {
 export default async function PlayersPage({
   searchParams,
 }: {
-  searchParams: Promise<{ search?: string }>;
+  searchParams: Promise<{ search?: string; reset?: string }>;
 }) {
   await requireAuth();
   const params = await searchParams;
   const search = params.search ?? '';
+  const resetDone = params.reset === '1';
   let rows: Awaited<ReturnType<typeof getMergedPlayers>> = [];
   let dbError = '';
   try {
@@ -77,6 +79,14 @@ export default async function PlayersPage({
     await bulkDeletePlayers(ids);
   }
 
+  async function handleReset(formData: FormData) {
+    'use server';
+    const keepPlayerId = formData.get('keepPlayerId') as string;
+    if (!keepPlayerId) return;
+    await resetAllToStarterKit(keepPlayerId);
+    redirect('/players?reset=1');
+  }
+
   return (
     <div className="p-8">
       {dbError && (
@@ -84,10 +94,53 @@ export default async function PlayersPage({
           <strong>Database Error:</strong> {dbError}
         </div>
       )}
+      {resetDone && (
+        <div className="bg-green-900/40 border border-green-700 rounded p-3 mb-4 text-green-300 text-sm">
+          Inventories reset to the starter kit (the kept account was preserved).
+        </div>
+      )}
       <div className="flex items-center justify-between mb-6">
         <h1 className="text-2xl font-bold text-yellow-400">Players</h1>
         <span className="text-gray-400 text-sm">{rows.length} found</span>
       </div>
+
+      {/* Danger zone — reset all inventories to the starter kit, keep one account */}
+      <form action={handleReset} id="reset-form" className="mb-4">
+        <div className="bg-red-950/40 border border-red-800 rounded-lg p-4">
+          <div className="text-red-300 font-semibold mb-2 text-sm">
+            ⚠ Reset all inventories to the starter kit
+          </div>
+          <div className="flex flex-wrap gap-2 items-center">
+            <span className="text-gray-400 text-sm">Keep all items for:</span>
+            <select
+              name="keepPlayerId"
+              defaultValue=""
+              className="bg-gray-800 border border-gray-700 rounded px-3 py-2 text-gray-100 text-sm min-w-64"
+              required
+            >
+              <option value="" disabled>
+                — select the account to preserve —
+              </option>
+              {rows.map(({ player, user }) => (
+                <option key={String(player._id)} value={String(player._id)}>
+                  {player.username}
+                  {user?.email ? ` (${user.email})` : ''}
+                </option>
+              ))}
+            </select>
+            <button
+              type="submit"
+              id="reset-btn"
+              className="bg-red-700 hover:bg-red-600 text-white px-4 py-2 rounded text-sm transition-colors"
+            >
+              Reset everyone else
+            </button>
+          </div>
+          <div className="text-gray-500 text-xs mt-2">
+            Every other player drops to tee + jeans + sneakers (equipped). The selected account keeps everything. No undo.
+          </div>
+        </div>
+      </form>
 
       {/* Search */}
       <form method="GET" className="mb-4">
@@ -298,6 +351,22 @@ export default async function PlayersPage({
         return;
       }
       input.value = ids.join(',');
+    });
+  }
+
+  var resetForm = document.getElementById('reset-form');
+  if (resetForm) {
+    resetForm.addEventListener('submit', function(e) {
+      var sel = resetForm.querySelector('[name=keepPlayerId]');
+      if (!sel || !sel.value) {
+        e.preventDefault();
+        alert('Pick an account to keep first.');
+        return;
+      }
+      var label = sel.options[sel.selectedIndex].text;
+      if (!confirm('Reset ALL other players to the starter kit?\\n\\nKeep everything only for:\\n' + label + '\\n\\nThis cannot be undone.')) {
+        e.preventDefault();
+      }
     });
   }
 })();

@@ -174,6 +174,61 @@ export async function toggleEquip(itemId: string): Promise<void> {
     );
 }
 
+// The new-player starter kit (kept in sync with the game's STARTER_KIT in
+// src/server/src/db/mongo.ts). inventory.playerId is a STRING in this schema —
+// matching the game and the player-detail page (NOT an ObjectId).
+const STARTER_KIT = [
+  { itemType: 'upper_body', itemId: 'worn_tshirt', rarity: 'common' },
+  { itemType: 'lower_body', itemId: 'blue_jeans', rarity: 'common' },
+  { itemType: 'feet', itemId: 'beatup_sneakers', rarity: 'common' },
+];
+const STARTER_LOADOUT: Record<string, string> = {
+  upper_body: 'worn_tshirt', lower_body: 'blue_jeans', feet: 'beatup_sneakers',
+};
+
+/**
+ * Reset every player EXCEPT `keepPlayerId` to the 3-item starter kit (equipped),
+ * and fix their equippedLoadout. The kept account is left untouched. Destructive
+ * — there's no undo. Returns how many players were reset.
+ */
+export async function resetAllToStarterKit(
+  keepPlayerId: string
+): Promise<{ reset: number }> {
+  const db = await getDB();
+  const players = await db
+    .collection('players')
+    .find({}, { projection: { _id: 1 } })
+    .toArray();
+
+  const resetObjIds = players
+    .map((p) => p._id)
+    .filter((id) => id.toString() !== keepPlayerId);
+  const resetIds = resetObjIds.map((id) => id.toString());
+  if (resetIds.length === 0) return { reset: 0 };
+
+  const now = new Date();
+  // playerId is a STRING here (matches the game) — do NOT use ObjectId.
+  await db.collection('inventory').deleteMany({ playerId: { $in: resetIds } });
+  const rows = resetIds.flatMap((pid) =>
+    STARTER_KIT.map((k) => ({
+      playerId: pid,
+      itemType: k.itemType,
+      itemId: k.itemId,
+      rarity: k.rarity,
+      equipped: true,
+      obtainedAt: now,
+      source: 'starter',
+    }))
+  );
+  await db.collection('inventory').insertMany(rows);
+  await db.collection('players').updateMany(
+    { _id: { $in: resetObjIds } },
+    { $set: { equippedLoadout: STARTER_LOADOUT, updatedAt: now } }
+  );
+
+  return { reset: resetIds.length };
+}
+
 export async function giveItemToAll(
   itemType: string,
   itemId: string,
