@@ -3,6 +3,7 @@ import { getDB } from '@/lib/db';
 import { ObjectId } from 'mongodb';
 import { redirect } from 'next/navigation';
 import { bulkDeletePlayers, resetAllToStarterKit } from '@/app/actions';
+import { revalidatePath } from 'next/cache';
 
 async function getMergedPlayers(search: string) {
   const db = await getDB();
@@ -77,6 +78,7 @@ export default async function PlayersPage({
     const raw = formData.get('selectedIds') as string;
     const ids = raw ? raw.split(',').filter(Boolean) : [];
     await bulkDeletePlayers(ids);
+    revalidatePath('/players');
   }
 
   async function handleReset(formData: FormData) {
@@ -183,11 +185,6 @@ export default async function PlayersPage({
           type="submit"
           id="bulk-delete-btn"
           className="hidden bg-red-700 hover:bg-red-600 text-white px-4 py-1.5 rounded text-sm transition-colors"
-          onClick={(e) => {
-            // Confirmation is handled via the data-confirm pattern in a client
-            // component; here we rely on native confirm via the hidden input being
-            // populated before submit.
-          }}
         >
           Delete Selected
         </button>

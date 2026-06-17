@@ -14,6 +14,7 @@ import {
   toggleEquip,
 } from '@/app/actions';
 import { CATALOG_BY_SLOT, CATALOG_BY_ID } from '@/lib/catalog';
+import { revalidatePath } from 'next/cache';
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -93,6 +94,7 @@ export default async function PlayerDetailPage({
       email: formData.get('email') as string,
     });
     await updatePlayer(id, { username: formData.get('username') as string });
+    revalidatePath(`/players/${id}`);
   }
 
   async function handleResetPassword(formData: FormData) {
@@ -100,6 +102,7 @@ export default async function PlayerDetailPage({
     const newPw = formData.get('newPassword') as string;
     if (!newPw || newPw.length < 6) return;
     await resetPassword(userId, newPw);
+    revalidatePath(`/players/${id}`);
   }
 
   // -- Stats actions ---------------------------------------------------------
@@ -116,11 +119,13 @@ export default async function PlayerDetailPage({
       pullCredits: Number(formData.get('pullCredits')),
       pityCounter: Number(formData.get('pityCounter')),
     });
+    revalidatePath(`/players/${id}`);
   }
 
   async function handleResetFreePull() {
     'use server';
     await resetFreePull(id);
+    revalidatePath(`/players/${id}`);
   }
 
   // -- Inventory actions -----------------------------------------------------
@@ -131,6 +136,7 @@ export default async function PlayerDetailPage({
     const equip = formData.get('equip') === 'on';
     if (!itemId) return;
     await giveItem(id, itemId, equip);
+    revalidatePath(`/players/${id}`);
   }
 
   async function handleEditItem(formData: FormData) {
@@ -144,6 +150,7 @@ export default async function PlayerDetailPage({
       itemId: def.id,
       rarity: def.rarity,
     });
+    revalidatePath(`/players/${id}`);
   }
 
   // -- Delete ----------------------------------------------------------------
@@ -295,10 +302,12 @@ export default async function PlayerDetailPage({
                 async function handleToggle() {
                   'use server';
                   await toggleEquip(itemMongoId);
+                  revalidatePath(`/players/${id}`);
                 }
                 async function handleDeleteItem() {
                   'use server';
                   await deleteItem(itemMongoId);
+                  revalidatePath(`/players/${id}`);
                 }
 
                 return (
