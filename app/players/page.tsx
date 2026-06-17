@@ -100,7 +100,15 @@ export default async function PlayersPage({
         </div>
       )}
       <div className="flex items-center justify-between mb-6">
-        <h1 className="text-2xl font-bold text-yellow-400">Players</h1>
+        <div className="flex items-center gap-3">
+          <h1 className="text-2xl font-bold text-yellow-400">Players</h1>
+          <a
+            href="/players/new"
+            className="bg-green-700 hover:bg-green-600 text-white px-3 py-1.5 rounded text-sm transition-colors"
+          >
+            + New account
+          </a>
+        </div>
         <span className="text-gray-400 text-sm">{rows.length} found</span>
       </div>
 

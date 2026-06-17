@@ -6,39 +6,18 @@ import {
   updatePlayer,
   updateUser,
   resetPassword,
+  resetFreePull,
   deletePlayer,
-  addItem,
+  giveItem,
+  updateItem,
   deleteItem,
   toggleEquip,
 } from '@/app/actions';
+import { CATALOG_BY_SLOT, CATALOG_BY_ID } from '@/lib/catalog';
 
 // ---------------------------------------------------------------------------
 // Constants
 // ---------------------------------------------------------------------------
-
-const ITEM_TYPES = [
-  'skin',
-  'hair',
-  'head_accessory',
-  'eyes_accessory',
-  'mouth_accessory',
-  'face_accessory',
-  'upper_body',
-  'lower_body',
-  'feet',
-  'back',
-  'air_space',
-  'hand_1h',
-] as const;
-
-const RARITIES = [
-  'common',
-  'uncommon',
-  'rare',
-  'epic',
-  'legendary',
-  'crazy',
-] as const;
 
 const CHARACTERS = [
   'male',
@@ -63,7 +42,7 @@ async function getPlayerFull(id: string) {
   }
 
   const player = await db.collection('players').findOne({ _id: oid });
-  // playerId is stored as string in inventory collection
+  // playerId is stored as a STRING in the inventory collection
   const inventory = await db
     .collection('inventory')
     .find({ playerId: oid.toString() })
@@ -75,9 +54,14 @@ async function getPlayerFull(id: string) {
   let user = null;
   if (player.userId) {
     try {
-      const uid = player.userId instanceof ObjectId ? player.userId : new ObjectId(String(player.userId));
+      const uid =
+        player.userId instanceof ObjectId
+          ? player.userId
+          : new ObjectId(String(player.userId));
       user = await db.collection('users').findOne({ _id: uid });
-    } catch { /* invalid userId format */ }
+    } catch {
+      /* invalid userId format */
+    }
   }
 
   return { player, user, inventory };
@@ -108,10 +92,7 @@ export default async function PlayerDetailPage({
       username: formData.get('username') as string,
       email: formData.get('email') as string,
     });
-    // Also sync username on player record
-    await updatePlayer(id, {
-      username: formData.get('username') as string,
-    });
+    await updatePlayer(id, { username: formData.get('username') as string });
   }
 
   async function handleResetPassword(formData: FormData) {
@@ -121,7 +102,7 @@ export default async function PlayerDetailPage({
     await resetPassword(userId, newPw);
   }
 
-  // -- Stats action ----------------------------------------------------------
+  // -- Stats actions ---------------------------------------------------------
 
   async function handleUpdateStats(formData: FormData) {
     'use server';
@@ -132,19 +113,37 @@ export default async function PlayerDetailPage({
       totalRaces: Number(formData.get('totalRaces')),
       totalWins: Number(formData.get('totalWins')),
       equippedChar: formData.get('equippedChar') as string,
+      pullCredits: Number(formData.get('pullCredits')),
+      pityCounter: Number(formData.get('pityCounter')),
     });
+  }
+
+  async function handleResetFreePull() {
+    'use server';
+    await resetFreePull(id);
   }
 
   // -- Inventory actions -----------------------------------------------------
 
-  async function handleAddItem(formData: FormData) {
+  async function handleGiveItem(formData: FormData) {
     'use server';
-    await addItem(
-      id,
-      formData.get('itemType') as string,
-      formData.get('itemId') as string,
-      formData.get('rarity') as string
-    );
+    const itemId = formData.get('itemId') as string;
+    const equip = formData.get('equip') === 'on';
+    if (!itemId) return;
+    await giveItem(id, itemId, equip);
+  }
+
+  async function handleEditItem(formData: FormData) {
+    'use server';
+    const itemMongoId = formData.get('itemMongoId') as string;
+    const newItemId = formData.get('newItemId') as string;
+    const def = CATALOG_BY_ID[newItemId];
+    if (!itemMongoId || !def) return;
+    await updateItem(itemMongoId, {
+      itemType: def.slot,
+      itemId: def.id,
+      rarity: def.rarity,
+    });
   }
 
   // -- Delete ----------------------------------------------------------------
@@ -153,6 +152,10 @@ export default async function PlayerDetailPage({
     'use server';
     await deletePlayer(id);
   }
+
+  const freePullAt = player.lastFreePullAt
+    ? new Date(player.lastFreePullAt).toLocaleString()
+    : null;
 
   return (
     <div className="p-8 max-w-4xl">
@@ -168,9 +171,7 @@ export default async function PlayerDetailPage({
         </span>
       </div>
 
-      {/* ------------------------------------------------------------------ */}
-      {/* Account                                                             */}
-      {/* ------------------------------------------------------------------ */}
+      {/* Account */}
       <Section title="Account">
         <form action={handleUpdateAccount} className="grid grid-cols-2 gap-4">
           <Field
@@ -228,87 +229,63 @@ export default async function PlayerDetailPage({
         </div>
       </Section>
 
-      {/* ------------------------------------------------------------------ */}
-      {/* Stats                                                               */}
-      {/* ------------------------------------------------------------------ */}
+      {/* Stats */}
       <Section title="Stats">
         <form action={handleUpdateStats} className="grid grid-cols-2 gap-4">
-          <Field
-            name="xp"
-            label="XP"
-            type="number"
-            defaultValue={player.xp ?? 0}
-          />
-          <Field
-            name="level"
-            label="Level"
-            type="number"
-            defaultValue={player.level ?? 1}
-          />
-          <Field
-            name="coins"
-            label="Coins"
-            type="number"
-            defaultValue={player.coins ?? 0}
-          />
-          <Field
-            name="totalRaces"
-            label="Total Races"
-            type="number"
-            defaultValue={player.totalRaces ?? 0}
-          />
-          <Field
-            name="totalWins"
-            label="Total Wins"
-            type="number"
-            defaultValue={player.totalWins ?? 0}
-          />
+          <Field name="xp" label="XP" type="number" defaultValue={player.xp ?? 0} />
+          <Field name="level" label="Level" type="number" defaultValue={player.level ?? 1} />
+          <Field name="coins" label="Coins" type="number" defaultValue={player.coins ?? 0} />
+          <Field name="totalRaces" label="Total Races" type="number" defaultValue={player.totalRaces ?? 0} />
+          <Field name="totalWins" label="Total Wins" type="number" defaultValue={player.totalWins ?? 0} />
           <div>
-            <label className="block text-sm text-gray-400 mb-1">
-              Equipped Character
-            </label>
-            <select
-              name="equippedChar"
-              defaultValue={player.equippedChar ?? ''}
-              className={selectCls}
-            >
+            <label className="block text-sm text-gray-400 mb-1">Equipped Character</label>
+            <select name="equippedChar" defaultValue={player.equippedChar ?? ''} className={selectCls}>
               <option value="">— none —</option>
               {CHARACTERS.map((c) => (
-                <option key={c} value={c}>
-                  {c}
-                </option>
+                <option key={c} value={c}>{c}</option>
               ))}
             </select>
           </div>
+          {/* Gacha / economy */}
+          <Field name="pullCredits" label="Pull Credits" type="number" defaultValue={player.pullCredits ?? 0} />
+          <Field name="pityCounter" label="Pity Counter" type="number" defaultValue={player.pityCounter ?? 0} />
           <div className="col-span-2">
             <SaveButton label="Save Stats" />
           </div>
         </form>
+
+        <div className="mt-5 pt-5 border-t border-gray-700 flex items-center gap-4">
+          <div className="text-sm text-gray-400">
+            Free pull used at:{' '}
+            {freePullAt ? (
+              <span className="text-gray-200">{freePullAt}</span>
+            ) : (
+              <span className="text-green-400">available now</span>
+            )}
+          </div>
+          <form action={handleResetFreePull}>
+            <button
+              type="submit"
+              className="bg-indigo-700 hover:bg-indigo-600 text-white px-4 py-2 rounded transition-colors text-sm"
+            >
+              Reset Free Pull
+            </button>
+          </form>
+        </div>
       </Section>
 
-      {/* ------------------------------------------------------------------ */}
-      {/* Inventory                                                           */}
-      {/* ------------------------------------------------------------------ */}
+      {/* Inventory */}
       <Section title={`Inventory (${inventory.length} items)`}>
         {inventory.length > 0 && (
           <table className="w-full text-sm mb-5">
             <thead>
               <tr className="border-b border-gray-700">
-                <th className="text-left py-2 pr-3 text-gray-400 font-medium">
-                  Type
-                </th>
-                <th className="text-left py-2 pr-3 text-gray-400 font-medium">
-                  Item ID
-                </th>
-                <th className="text-left py-2 pr-3 text-gray-400 font-medium">
-                  Rarity
-                </th>
-                <th className="text-left py-2 pr-3 text-gray-400 font-medium">
-                  Equipped
-                </th>
-                <th className="text-left py-2 text-gray-400 font-medium">
-                  Actions
-                </th>
+                <th className="text-left py-2 pr-3 text-gray-400 font-medium">Type</th>
+                <th className="text-left py-2 pr-3 text-gray-400 font-medium">Item ID</th>
+                <th className="text-left py-2 pr-3 text-gray-400 font-medium">Rarity</th>
+                <th className="text-left py-2 pr-3 text-gray-400 font-medium">Equipped</th>
+                <th className="text-left py-2 pr-3 text-gray-400 font-medium">Change item</th>
+                <th className="text-left py-2 text-gray-400 font-medium">Delete</th>
               </tr>
             </thead>
             <tbody>
@@ -326,12 +303,8 @@ export default async function PlayerDetailPage({
 
                 return (
                   <tr key={itemMongoId} className="border-b border-gray-800">
-                    <td className="py-2 pr-3 text-gray-300 text-xs">
-                      {item.itemType}
-                    </td>
-                    <td className="py-2 pr-3 text-gray-300 font-mono text-xs">
-                      {item.itemId}
-                    </td>
+                    <td className="py-2 pr-3 text-gray-300 text-xs">{item.itemType}</td>
+                    <td className="py-2 pr-3 text-gray-300 font-mono text-xs">{item.itemId}</td>
                     <td className="py-2 pr-3">
                       <RarityBadge rarity={item.rarity} />
                     </td>
@@ -346,6 +319,26 @@ export default async function PlayerDetailPage({
                           }`}
                         >
                           {item.equipped ? 'Equipped' : 'Unequipped'}
+                        </button>
+                      </form>
+                    </td>
+                    {/* Edit in place — swap this row to a different catalog item */}
+                    <td className="py-2 pr-3">
+                      <form action={handleEditItem} className="flex gap-1 items-center">
+                        <input type="hidden" name="itemMongoId" value={itemMongoId} />
+                        <select
+                          name="newItemId"
+                          defaultValue={CATALOG_BY_ID[item.itemId] ? item.itemId : ''}
+                          className="bg-gray-800 border border-gray-700 rounded px-2 py-1 text-gray-100 text-xs"
+                        >
+                          <option value="">change to…</option>
+                          <CatalogOptions />
+                        </select>
+                        <button
+                          type="submit"
+                          className="text-xs bg-gray-700 hover:bg-gray-600 text-gray-200 px-2 py-1 rounded transition-colors"
+                        >
+                          Save
                         </button>
                       </form>
                     </td>
@@ -366,45 +359,31 @@ export default async function PlayerDetailPage({
           </table>
         )}
 
-        {/* Add item form */}
+        {/* Give item — pick from the real catalog */}
         <div className="border-t border-gray-700 pt-4">
           <p className="text-sm text-gray-400 mb-3">Give Item</p>
-          <form action={handleAddItem} className="flex gap-2 flex-wrap">
-            <select name="itemType" required className={selectCls}>
-              <option value="">Type…</option>
-              {ITEM_TYPES.map((t) => (
-                <option key={t} value={t}>
-                  {t}
-                </option>
-              ))}
+          <form action={handleGiveItem} className="flex gap-2 flex-wrap items-center">
+            <select name="itemId" required defaultValue="" className={selectCls + ' min-w-56'}>
+              <option value="" disabled>
+                Select item…
+              </option>
+              <CatalogOptions />
             </select>
-            <input
-              name="itemId"
-              placeholder="Item ID"
-              required
-              className={inputCls + ' w-40'}
-            />
-            <select name="rarity" required className={selectCls}>
-              <option value="">Rarity…</option>
-              {RARITIES.map((r) => (
-                <option key={r} value={r}>
-                  {r}
-                </option>
-              ))}
-            </select>
+            <label className="flex items-center gap-1.5 text-sm text-gray-300">
+              <input type="checkbox" name="equip" className="accent-blue-500" />
+              equip now
+            </label>
             <button
               type="submit"
               className="bg-blue-600 hover:bg-blue-500 text-white px-4 py-1.5 rounded transition-colors text-sm"
             >
-              Add
+              Give
             </button>
           </form>
         </div>
       </Section>
 
-      {/* ------------------------------------------------------------------ */}
-      {/* Danger Zone                                                         */}
-      {/* ------------------------------------------------------------------ */}
+      {/* Danger Zone */}
       <section className="bg-gray-900 border border-red-900/50 rounded-lg p-6">
         <h2 className="text-lg font-semibold text-red-400 mb-2">Danger Zone</h2>
         <p className="text-gray-400 text-sm mb-4">
@@ -425,7 +404,7 @@ export default async function PlayerDetailPage({
 }
 
 // ---------------------------------------------------------------------------
-// Shared style tokens
+// Shared style tokens + sub-components
 // ---------------------------------------------------------------------------
 
 const inputCls =
@@ -434,17 +413,24 @@ const inputCls =
 const selectCls =
   'bg-gray-800 border border-gray-700 rounded px-3 py-1.5 text-gray-100 focus:outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-500 text-sm';
 
-// ---------------------------------------------------------------------------
-// Sub-components
-// ---------------------------------------------------------------------------
+/** Catalog <optgroup>s, grouped by slot — reused by the give + edit selects. */
+function CatalogOptions() {
+  return (
+    <>
+      {Object.entries(CATALOG_BY_SLOT).map(([slot, items]) => (
+        <optgroup key={slot} label={slot}>
+          {items.map((it) => (
+            <option key={it.id} value={it.id}>
+              {it.displayName} ({it.rarity})
+            </option>
+          ))}
+        </optgroup>
+      ))}
+    </>
+  );
+}
 
-function Section({
-  title,
-  children,
-}: {
-  title: string;
-  children: React.ReactNode;
-}) {
+function Section({ title, children }: { title: string; children: React.ReactNode }) {
   return (
     <section className="bg-gray-900 border border-gray-700 rounded-lg p-6 mb-5">
       <h2 className="text-lg font-semibold text-gray-100 mb-4">{title}</h2>
@@ -502,8 +488,6 @@ function RarityBadge({ rarity }: { rarity: string }) {
   };
   const cls = colors[rarity?.toLowerCase()] ?? 'text-gray-400 bg-gray-700';
   return (
-    <span className={`text-xs px-2 py-0.5 rounded font-medium ${cls}`}>
-      {rarity}
-    </span>
+    <span className={`text-xs px-2 py-0.5 rounded font-medium ${cls}`}>{rarity}</span>
   );
 }

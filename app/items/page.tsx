@@ -2,34 +2,7 @@ import { requireAuth } from '@/lib/auth';
 import { getDB } from '@/lib/db';
 import { ObjectId } from 'mongodb';
 import { giveItemToAll } from '@/app/actions';
-
-// ---------------------------------------------------------------------------
-// Constants
-// ---------------------------------------------------------------------------
-
-const ITEM_TYPES = [
-  'skin',
-  'hair',
-  'head_accessory',
-  'eyes_accessory',
-  'mouth_accessory',
-  'face_accessory',
-  'upper_body',
-  'lower_body',
-  'feet',
-  'back',
-  'air_space',
-  'hand_1h',
-] as const;
-
-const RARITIES = [
-  'common',
-  'uncommon',
-  'rare',
-  'epic',
-  'legendary',
-  'crazy',
-] as const;
+import { CATALOG_BY_SLOT } from '@/lib/catalog';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -139,11 +112,9 @@ export default async function ItemsPage({
 
   async function handleGiveToAll(formData: FormData) {
     'use server';
-    const itemType = formData.get('itemType') as string;
     const itemId = formData.get('itemId') as string;
-    const rarity = formData.get('rarity') as string;
-    const { count } = await giveItemToAll(itemType, itemId, rarity);
-    // Redirect with result count
+    if (!itemId) return;
+    const { count } = await giveItemToAll(itemId);
     const { redirect } = await import('next/navigation');
     redirect(`/items?result=${count}`);
   }
@@ -169,37 +140,19 @@ export default async function ItemsPage({
         )}
         <form action={handleGiveToAll} className="flex gap-2 flex-wrap items-end">
           <div>
-            <label className="block text-xs text-gray-400 mb-1">Type</label>
-            <select
-              name="itemType"
-              required
-              className={selectCls}
-            >
-              <option value="">Select type…</option>
-              {ITEM_TYPES.map((t) => (
-                <option key={t} value={t}>
-                  {t}
-                </option>
-              ))}
-            </select>
-          </div>
-          <div>
-            <label className="block text-xs text-gray-400 mb-1">Item ID</label>
-            <input
-              name="itemId"
-              placeholder="e.g. sword_001"
-              required
-              className={inputCls + ' w-40'}
-            />
-          </div>
-          <div>
-            <label className="block text-xs text-gray-400 mb-1">Rarity</label>
-            <select name="rarity" required className={selectCls}>
-              <option value="">Select rarity…</option>
-              {RARITIES.map((r) => (
-                <option key={r} value={r}>
-                  {r}
-                </option>
+            <label className="block text-xs text-gray-400 mb-1">Item</label>
+            <select name="itemId" required defaultValue="" className={selectCls + ' min-w-56'}>
+              <option value="" disabled>
+                Select item…
+              </option>
+              {Object.entries(CATALOG_BY_SLOT).map(([slot, items]) => (
+                <optgroup key={slot} label={slot}>
+                  {items.map((it) => (
+                    <option key={it.id} value={it.id}>
+                      {it.displayName} ({it.rarity})
+                    </option>
+                  ))}
+                </optgroup>
               ))}
             </select>
           </div>

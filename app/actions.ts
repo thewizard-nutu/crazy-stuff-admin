@@ -4,12 +4,21 @@ import { redirect } from 'next/navigation';
 import { ObjectId } from 'mongodb';
 import bcrypt from 'bcryptjs';
 import { getDB } from '@/lib/db';
+import { CATALOG_BY_ID } from '@/lib/catalog';
 import {
   verifyPassword,
   generateToken,
   setAuthCookie,
   clearAuthCookie,
 } from '@/lib/auth';
+
+// ---------------------------------------------------------------------------
+// Schema note
+// ---------------------------------------------------------------------------
+// `inventory.playerId` is a STRING (= player._id.toString()) — matching the game
+// (src/server/src/db/mongo.ts) and the player-detail query. `players.userId` is
+// also a STRING, while `users._id` is an ObjectId. Mixing these up silently
+// breaks add/delete (no matches), which is what this file previously did.
 
 // ---------------------------------------------------------------------------
 // Auth
@@ -43,12 +52,24 @@ export async function updatePlayer(
     totalRaces?: number;
     totalWins?: number;
     equippedChar?: string;
+    pullCredits?: number;
+    pityCounter?: number;
+    lastFreePullAt?: Date | null;
   }
 ): Promise<void> {
   const db = await getDB();
   await db.collection('players').updateOne(
     { _id: new ObjectId(id) },
     { $set: { ...data, updatedAt: new Date() } }
+  );
+}
+
+/** Reset the daily free gacha pull so the player can pull again now. */
+export async function resetFreePull(id: string): Promise<void> {
+  const db = await getDB();
+  await db.collection('players').updateOne(
+    { _id: new ObjectId(id) },
+    { $set: { lastFreePullAt: null, updatedAt: new Date() } }
   );
 }
 
@@ -80,22 +101,83 @@ export async function resetPassword(
 }
 
 // ---------------------------------------------------------------------------
-// Players — delete
+// Players — create / delete
 // ---------------------------------------------------------------------------
+
+// Starter kit (kept in sync with the game's STARTER_KIT). playerId is a STRING.
+const STARTER_KIT = [
+  { itemType: 'upper_body', itemId: 'worn_tshirt', rarity: 'common' },
+  { itemType: 'lower_body', itemId: 'blue_jeans', rarity: 'common' },
+  { itemType: 'feet', itemId: 'beatup_sneakers', rarity: 'common' },
+];
+const STARTER_LOADOUT: Record<string, string> = {
+  upper_body: 'worn_tshirt', lower_body: 'blue_jeans', feet: 'beatup_sneakers',
+};
+
+/**
+ * Create a new account: user + player + equipped starter kit, mirroring the
+ * game's registration (getOrCreatePlayer). Redirects to the new player on success.
+ */
+export async function createAccount(
+  email: string,
+  username: string,
+  password: string
+): Promise<{ error?: string }> {
+  const db = await getDB();
+  const cleanEmail = email.trim().toLowerCase();
+  const cleanName = username.trim();
+  if (!cleanEmail || !cleanName) return { error: 'Email and username are required' };
+  if (password.length < 6) return { error: 'Password must be at least 6 characters' };
+
+  const users = db.collection('users');
+  if (await users.findOne({ email: cleanEmail })) return { error: 'Email already registered' };
+  if (
+    await users.findOne({ username: cleanName }, { collation: { locale: 'en', strength: 2 } })
+  ) {
+    return { error: 'Username already taken' };
+  }
+
+  const now = new Date();
+  const hash = await bcrypt.hash(password, 10);
+  const userRes = await users.insertOne({
+    email: cleanEmail, passwordHash: hash, googleSub: null, username: cleanName, createdAt: now,
+  });
+  const userId = userRes.insertedId.toString();
+
+  const playerRes = await db.collection('players').insertOne({
+    userId, username: cleanName, xp: 0, level: 1, coins: 0, totalRaces: 0, totalWins: 0,
+    equippedChar: 'male', equippedLoadout: STARTER_LOADOUT,
+    pityCounter: 0, lastFreePullAt: null, pullCredits: 0, createdAt: now, updatedAt: now,
+  });
+  const playerId = playerRes.insertedId.toString();
+
+  await db.collection('inventory').insertMany(
+    STARTER_KIT.map((k) => ({
+      playerId, itemType: k.itemType, itemId: k.itemId, rarity: k.rarity,
+      equipped: true, obtainedAt: now, source: 'starter',
+    }))
+  );
+
+  redirect(`/players/${playerId}`);
+}
 
 export async function deletePlayer(id: string): Promise<void> {
   const db = await getDB();
-  const player = await db
-    .collection('players')
-    .findOne({ _id: new ObjectId(id) });
-
+  const player = await db.collection('players').findOne({ _id: new ObjectId(id) });
   if (!player) return;
 
-  await Promise.all([
+  const tasks: Promise<unknown>[] = [
     db.collection('players').deleteOne({ _id: new ObjectId(id) }),
-    db.collection('inventory').deleteMany({ playerId: new ObjectId(id) }),
-    db.collection('users').deleteOne({ _id: player.userId }),
-  ]);
+    // inventory.playerId is a STRING (= player._id.toString()).
+    db.collection('inventory').deleteMany({ playerId: id }),
+  ];
+  // players.userId is a STRING; users._id is an ObjectId.
+  if (player.userId) {
+    try {
+      tasks.push(db.collection('users').deleteOne({ _id: new ObjectId(String(player.userId)) }));
+    } catch { /* malformed userId — skip user delete */ }
+  }
+  await Promise.all(tasks);
 
   redirect('/players');
 }
@@ -105,7 +187,6 @@ export async function bulkDeletePlayers(ids: string[]): Promise<void> {
   const db = await getDB();
   const objectIds = ids.map((id) => new ObjectId(id));
 
-  // Find all players to get their userIds
   const players = await db
     .collection('players')
     .find({ _id: { $in: objectIds } })
@@ -114,11 +195,15 @@ export async function bulkDeletePlayers(ids: string[]): Promise<void> {
   const userIds = players
     .map((p) => p.userId)
     .filter(Boolean)
-    .map((uid) => (typeof uid === 'string' ? new ObjectId(uid) : uid));
+    .map((uid) => {
+      try { return typeof uid === 'string' ? new ObjectId(uid) : uid; } catch { return null; }
+    })
+    .filter((x): x is ObjectId => x !== null);
 
   await Promise.all([
     db.collection('players').deleteMany({ _id: { $in: objectIds } }),
-    db.collection('inventory').deleteMany({ playerId: { $in: objectIds } }),
+    // inventory.playerId is a STRING — match the string ids, not ObjectIds.
+    db.collection('inventory').deleteMany({ playerId: { $in: ids } }),
     db.collection('users').deleteMany({ _id: { $in: userIds } }),
   ]);
 }
@@ -127,21 +212,42 @@ export async function bulkDeletePlayers(ids: string[]): Promise<void> {
 // Inventory
 // ---------------------------------------------------------------------------
 
-export async function addItem(
+/**
+ * Give a catalog item to one player (slot + rarity resolved from the catalog).
+ * Optionally equip it now: unequips anything else in that slot and updates the
+ * player's denormalized equippedLoadout so the game renders it.
+ */
+export async function giveItem(
   playerId: string,
-  itemType: string,
   itemId: string,
-  rarity: string
-): Promise<void> {
+  equip = false
+): Promise<{ error?: string }> {
+  const def = CATALOG_BY_ID[itemId];
+  if (!def) return { error: 'Unknown item' };
   const db = await getDB();
+
+  if (equip) {
+    await db.collection('inventory').updateMany(
+      { playerId, itemType: def.slot, equipped: true },
+      { $set: { equipped: false } }
+    );
+  }
   await db.collection('inventory').insertOne({
-    playerId: new ObjectId(playerId),
-    itemType,
-    itemId,
-    rarity,
-    equipped: false,
+    playerId, // STRING — matches the game + the rest of this app
+    itemType: def.slot,
+    itemId: def.id,
+    rarity: def.rarity,
+    equipped: equip,
     obtainedAt: new Date(),
+    source: 'admin',
   });
+  if (equip) {
+    await db.collection('players').updateOne(
+      { _id: new ObjectId(playerId) },
+      { $set: { [`equippedLoadout.${def.slot}`]: def.id, updatedAt: new Date() } }
+    );
+  }
+  return {};
 }
 
 export async function updateItem(
@@ -162,29 +268,17 @@ export async function deleteItem(itemId: string): Promise<void> {
 
 export async function toggleEquip(itemId: string): Promise<void> {
   const db = await getDB();
-  const item = await db
-    .collection('inventory')
-    .findOne({ _id: new ObjectId(itemId) });
+  const item = await db.collection('inventory').findOne({ _id: new ObjectId(itemId) });
   if (!item) return;
-  await db
-    .collection('inventory')
-    .updateOne(
-      { _id: new ObjectId(itemId) },
-      { $set: { equipped: !item.equipped } }
-    );
+  await db.collection('inventory').updateOne(
+    { _id: new ObjectId(itemId) },
+    { $set: { equipped: !item.equipped } }
+  );
 }
 
-// The new-player starter kit (kept in sync with the game's STARTER_KIT in
-// src/server/src/db/mongo.ts). inventory.playerId is a STRING in this schema —
-// matching the game and the player-detail page (NOT an ObjectId).
-const STARTER_KIT = [
-  { itemType: 'upper_body', itemId: 'worn_tshirt', rarity: 'common' },
-  { itemType: 'lower_body', itemId: 'blue_jeans', rarity: 'common' },
-  { itemType: 'feet', itemId: 'beatup_sneakers', rarity: 'common' },
-];
-const STARTER_LOADOUT: Record<string, string> = {
-  upper_body: 'worn_tshirt', lower_body: 'blue_jeans', feet: 'beatup_sneakers',
-};
+// ---------------------------------------------------------------------------
+// Bulk inventory ops
+// ---------------------------------------------------------------------------
 
 /**
  * Reset every player EXCEPT `keepPlayerId` to the 3-item starter kit (equipped),
@@ -229,26 +323,26 @@ export async function resetAllToStarterKit(
   return { reset: resetIds.length };
 }
 
-export async function giveItemToAll(
-  itemType: string,
-  itemId: string,
-  rarity: string
-): Promise<{ count: number }> {
+/** Give a catalog item to ALL players (unequipped; slot + rarity from catalog). */
+export async function giveItemToAll(itemId: string): Promise<{ count: number }> {
+  const def = CATALOG_BY_ID[itemId];
+  if (!def) return { count: 0 };
   const db = await getDB();
   const players = await db
     .collection('players')
     .find({}, { projection: { _id: 1 } })
     .toArray();
-
   if (players.length === 0) return { count: 0 };
 
+  const now = new Date();
   const docs = players.map((p) => ({
-    playerId: p._id,
-    itemType,
-    itemId,
-    rarity,
+    playerId: p._id.toString(), // STRING
+    itemType: def.slot,
+    itemId: def.id,
+    rarity: def.rarity,
     equipped: false,
-    obtainedAt: new Date(),
+    obtainedAt: now,
+    source: 'admin',
   }));
 
   await db.collection('inventory').insertMany(docs);

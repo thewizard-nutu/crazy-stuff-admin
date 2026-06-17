@@ -6,7 +6,8 @@
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
-    "lint": "eslint"
+    "lint": "eslint",
+    "sync-catalog": "npx tsx scripts/sync-catalog.ts"
   },
   "dependencies": {
     "bcryptjs": "^3.0.3",
