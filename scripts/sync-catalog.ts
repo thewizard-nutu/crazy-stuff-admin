@@ -14,6 +14,9 @@ import { ITEMS } from '../../crazy-stuff/src/shared/items';
 const here = dirname(fileURLToPath(import.meta.url));
 
 const items = Object.values(ITEMS)
+  // Only items with finished art (released) belong in the admin picker — the
+  // store can't sell, and granting can't render, an art-less item.
+  .filter((i) => i.released !== false)
   .map((i) => ({ id: i.id, displayName: i.displayName, slot: i.slot, rarity: i.rarity }))
   .sort((a, b) => a.slot.localeCompare(b.slot) || a.displayName.localeCompare(b.displayName));
 

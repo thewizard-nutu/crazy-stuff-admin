@@ -1,6 +1,7 @@
 'use server';
 
 import { redirect } from 'next/navigation';
+import { revalidatePath } from 'next/cache';
 import { ObjectId } from 'mongodb';
 import bcrypt from 'bcryptjs';
 import { getDB } from '@/lib/db';
@@ -321,6 +322,51 @@ export async function resetAllToStarterKit(
   );
 
   return { reset: resetIds.length };
+}
+
+// ---------------------------------------------------------------------------
+// Coin store rotation (#25) — curate the 5 cosmetics on sale each month.
+// Writes the `store_rotation` collection the game server reads (one doc per
+// UTC month, keyed by seasonId "YYYY-MM"). The game validates eligibility +
+// prices on its side, so this only needs to record known catalog ids.
+// ---------------------------------------------------------------------------
+
+const STORE_SIZE = 5;
+
+/** Set a month's store rotation. Dedupes, drops unknown ids, caps at 5. */
+export async function setStoreRotation(
+  seasonId: string,
+  itemIds: string[]
+): Promise<{ error?: string; itemIds?: string[] }> {
+  if (!/^\d{4}-\d{2}$/.test(seasonId)) return { error: 'Bad season id' };
+  const seen = new Set<string>();
+  const clean: string[] = [];
+  for (const id of itemIds) {
+    if (!id || seen.has(id)) continue;
+    if (!CATALOG_BY_ID[id]) return { error: `Unknown item: ${id}` };
+    seen.add(id);
+    clean.push(id);
+  }
+  if (clean.length > STORE_SIZE) return { error: `At most ${STORE_SIZE} items` };
+
+  const db = await getDB();
+  const now = new Date();
+  await db.collection('store_rotation').updateOne(
+    { seasonId },
+    { $set: { itemIds: clean, updatedAt: now }, $setOnInsert: { seasonId, createdAt: now } },
+    { upsert: true }
+  );
+  revalidatePath('/store');
+  return { itemIds: clean };
+}
+
+/** Form-action wrapper: reads `seasonId` + `slot0..slot4` from the submitted form. */
+export async function saveStoreRotationForm(formData: FormData): Promise<void> {
+  const seasonId = String(formData.get('seasonId') ?? '');
+  const itemIds = [0, 1, 2, 3, 4]
+    .map((i) => String(formData.get(`slot${i}`) ?? ''))
+    .filter(Boolean);
+  await setStoreRotation(seasonId, itemIds);
 }
 
 /** Give a catalog item to ALL players (unequipped; slot + rarity from catalog). */

@@ -50,6 +50,12 @@ export default async function RootLayout({
             >
               Items
             </a>
+            <a
+              href="/store"
+              className="text-blue-400 hover:text-blue-300 transition-colors text-sm"
+            >
+              Coin Shop
+            </a>
             <form action={logoutAction} className="ml-auto">
               <button
                 type="submit"
