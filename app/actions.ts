@@ -369,6 +369,46 @@ export async function saveStoreRotationForm(formData: FormData): Promise<void> {
   await setStoreRotation(seasonId, itemIds);
 }
 
+// ─── Gacha config ────────────────────────────────────────────────────────────
+
+const GACHA_RARITIES = new Set([
+  'common', 'uncommon', 'rare', 'epic', 'legendary', 'crazy',
+]);
+
+/**
+ * Persist the gacha tuning the game server reads live (Mongo `gacha_config`,
+ * doc `_id:'active'`): the six tier weights and per-item rarity/enable
+ * overrides. Sanitized here AND re-sanitized by the game before any roll, so a
+ * bad value can never corrupt a real-money pull — it just falls back.
+ */
+export async function saveGachaConfig(payload: {
+  tierWeights: Record<string, number>;
+  itemOverrides: Record<string, { rarity?: string; enabled?: boolean }>;
+}): Promise<{ ok: boolean }> {
+  const tierWeights: Record<string, number> = {};
+  for (const [k, v] of Object.entries(payload.tierWeights ?? {})) {
+    if (GACHA_RARITIES.has(k) && typeof v === 'number' && Number.isFinite(v) && v >= 0) {
+      tierWeights[k] = v;
+    }
+  }
+  const itemOverrides: Record<string, { rarity?: string; enabled?: boolean }> = {};
+  for (const [id, o] of Object.entries(payload.itemOverrides ?? {})) {
+    if (!o || typeof o !== 'object') continue;
+    const clean: { rarity?: string; enabled?: boolean } = {};
+    if (typeof o.rarity === 'string' && GACHA_RARITIES.has(o.rarity)) clean.rarity = o.rarity;
+    if (typeof o.enabled === 'boolean') clean.enabled = o.enabled;
+    if (clean.rarity !== undefined || clean.enabled !== undefined) itemOverrides[id] = clean;
+  }
+  const db = await getDB();
+  await db.collection('gacha_config').updateOne(
+    { _id: 'active' as never },
+    { $set: { tierWeights, itemOverrides, updatedAt: new Date() } },
+    { upsert: true },
+  );
+  revalidatePath('/gacha');
+  return { ok: true };
+}
+
 /** Give a catalog item to ALL players (unequipped; slot + rarity from catalog). */
 export async function giveItemToAll(itemId: string): Promise<{ count: number }> {
   const def = CATALOG_BY_ID[itemId];

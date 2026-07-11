@@ -56,6 +56,12 @@ export default async function RootLayout({
             >
               Coin Shop
             </a>
+            <a
+              href="/gacha"
+              className="text-blue-400 hover:text-blue-300 transition-colors text-sm"
+            >
+              Gacha
+            </a>
             <form action={logoutAction} className="ml-auto">
               <button
                 type="submit"
